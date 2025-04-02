@@ -1,6 +1,14 @@
 Building fzf
 ============
 
+Debian stable container build instructions
+------------------------------------------
+1. Optional recommendation: run `./install` to download and configure `fzf`, before building
+2. Build, will use `Containerfile` to create `bin/fzf` (replacing fzf if already present)
+```bash
+podman build -t fzf-builder -v $(pwd)/bin:/fzf/bin .
+```
+
 Build instructions
 ------------------
 
