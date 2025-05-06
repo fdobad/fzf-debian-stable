@@ -381,6 +381,7 @@ type Terminal struct {
 	slab               *util.Slab
 	theme              *tui.ColorTheme
 	tui                tui.Renderer
+	ttyDefault         string
 	ttyin              *os.File
 	executing          *util.AtomicBool
 	termSize           tui.TermSize
@@ -809,7 +810,7 @@ func NewTerminal(opts *Options, eventBox *util.EventBox, executor *util.Executor
 	// when you run fzf multiple times in your Go program. Closing it is known to
 	// cause problems with 'become' action and invalid terminal state after exit.
 	if ttyin == nil {
-		if ttyin, err = tui.TtyIn(); err != nil {
+		if ttyin, err = tui.TtyIn(opts.TtyDefault); err != nil {
 			return nil, err
 		}
 	}
@@ -817,7 +818,7 @@ func NewTerminal(opts *Options, eventBox *util.EventBox, executor *util.Executor
 		if tui.HasFullscreenRenderer() {
 			renderer = tui.NewFullscreenRenderer(opts.Theme, opts.Black, opts.Mouse)
 		} else {
-			renderer, err = tui.NewLightRenderer(ttyin, opts.Theme, opts.Black, opts.Mouse, opts.Tabstop, opts.ClearOnExit,
+			renderer, err = tui.NewLightRenderer(opts.TtyDefault, ttyin, opts.Theme, opts.Black, opts.Mouse, opts.Tabstop, opts.ClearOnExit,
 				true, func(h int) int { return h })
 		}
 	} else {
@@ -833,7 +834,7 @@ func NewTerminal(opts *Options, eventBox *util.EventBox, executor *util.Executor
 			effectiveMinHeight += borderLines(opts.BorderShape)
 			return util.Min(termHeight, util.Max(evaluateHeight(opts, termHeight), effectiveMinHeight))
 		}
-		renderer, err = tui.NewLightRenderer(ttyin, opts.Theme, opts.Black, opts.Mouse, opts.Tabstop, opts.ClearOnExit, false, maxHeightFunc)
+		renderer, err = tui.NewLightRenderer(opts.TtyDefault, ttyin, opts.Theme, opts.Black, opts.Mouse, opts.Tabstop, opts.ClearOnExit, false, maxHeightFunc)
 	}
 	if err != nil {
 		return nil, err
@@ -967,6 +968,7 @@ func NewTerminal(opts *Options, eventBox *util.EventBox, executor *util.Executor
 		keyChan:            make(chan tui.Event),
 		eventChan:          make(chan tui.Event, 6), // start | (load + result + zero|one) | (focus) | (resize)
 		tui:                renderer,
+		ttyDefault:         opts.TtyDefault,
 		ttyin:              ttyin,
 		initFunc:           func() error { return renderer.Init() },
 		executing:          util.NewAtomicBool(false),
@@ -1089,9 +1091,13 @@ func (t *Terminal) environImpl(forPreview bool) []string {
 	env = append(env, "FZF_ACTION="+t.lastAction.Name())
 	env = append(env, "FZF_KEY="+t.lastKey)
 	env = append(env, "FZF_PROMPT="+string(t.promptString))
+	env = append(env, "FZF_GHOST="+string(t.ghost))
+	env = append(env, "FZF_POINTER="+string(t.pointer))
 	env = append(env, "FZF_PREVIEW_LABEL="+t.previewLabelOpts.label)
 	env = append(env, "FZF_BORDER_LABEL="+t.borderLabelOpts.label)
 	env = append(env, "FZF_LIST_LABEL="+t.listLabelOpts.label)
+	env = append(env, "FZF_INPUT_LABEL="+t.inputLabelOpts.label)
+	env = append(env, "FZF_HEADER_LABEL="+t.headerLabelOpts.label)
 	if len(t.nthCurrent) > 0 {
 		env = append(env, "FZF_NTH="+RangesToString(t.nthCurrent))
 	}
@@ -1252,7 +1258,7 @@ func (t *Terminal) ansiLabelPrinter(str string, color *tui.ColorPair, fill bool)
 	printFn := func(window tui.Window, limit int) {
 		if offsets == nil {
 			// tui.Col* are not initialized until renderer.Init()
-			offsets = result.colorOffsets(nil, nil, t.theme, *color, *color, t.nthAttr, false)
+			offsets = result.colorOffsets(nil, nil, t.theme, *color, *color, t.nthAttr)
 		}
 		for limit > 0 {
 			if length > limit {
@@ -2647,6 +2653,9 @@ func (t *Terminal) headerIndent(borderShape tui.BorderShape) int {
 	}
 	if borderShape.HasLeft() {
 		indentSize -= 1 + t.borderWidth
+		if indentSize < 0 {
+			indentSize = 0
+		}
 	}
 	return indentSize
 }
@@ -2782,17 +2791,28 @@ func (t *Terminal) printItem(result Result, line int, maxLine int, index int, cu
 	_, selected := t.selected[item.Index()]
 	label := ""
 	extraWidth := 0
+	alt := false
+	altBg := t.theme.AltBg
+	selectedBg := selected && t.theme.SelectedBg != t.theme.ListBg
 	if t.jumping != jumpDisabled {
 		if index < len(t.jumpLabels) {
 			// Striped
-			current = index%2 == 0
+			if !altBg.IsColorDefined() {
+				altBg = t.theme.DarkBg
+				alt = index%2 == 0
+			} else {
+				alt = index%2 == 1
+			}
 			label = t.jumpLabels[index:index+1] + strings.Repeat(" ", util.Max(0, t.pointerLen-1))
 			if t.pointerLen == 0 {
 				extraWidth = 1
 			}
 		}
-	} else if current {
-		label = t.pointer
+	} else {
+		if current {
+			label = t.pointer
+		}
+		alt = !selectedBg && altBg.IsColorDefined() && index%2 == 1
 	}
 
 	// Avoid unnecessary redraw
@@ -2819,10 +2839,12 @@ func (t *Terminal) printItem(result Result, line int, maxLine int, index int, cu
 	maxWidth := t.window.Width() - (t.pointerLen + t.markerLen + 1)
 	postTask := func(lineNum int, width int, wrapped bool, forceRedraw bool) {
 		width += extraWidth
-		if (current || selected) && t.highlightLine {
+		if (current || selected || alt) && t.highlightLine {
 			color := tui.ColSelected
 			if current {
 				color = tui.ColCurrent
+			} else if alt {
+				color = color.WithBg(altBg)
 			}
 			fillSpaces := maxWidth - width
 			if wrapped {
@@ -2919,6 +2941,10 @@ func (t *Terminal) printItem(result Result, line int, maxLine int, index int, cu
 		} else {
 			base = tui.ColNormal
 			match = tui.ColMatch
+		}
+		if alt {
+			base = base.WithBg(altBg)
+			match = match.WithBg(altBg)
 		}
 		finalLineNum = t.printHighlighted(result, base, match, false, true, line, maxLine, forceRedraw, preTask, postTask)
 	}
@@ -3018,7 +3044,7 @@ func (t *Terminal) printHighlighted(result Result, colBase tui.ColorPair, colMat
 			sort.Sort(ByOrder(nthOffsets))
 		}
 	}
-	allOffsets := result.colorOffsets(charOffsets, nthOffsets, t.theme, colBase, colMatch, t.nthAttr, current)
+	allOffsets := result.colorOffsets(charOffsets, nthOffsets, t.theme, colBase, colMatch, t.nthAttr)
 
 	maxLines := 1
 	if t.canSpanMultiLines() {
@@ -3144,7 +3170,7 @@ func (t *Terminal) printHighlighted(result Result, colBase tui.ColorPair, colMat
 			wasWrapped = true
 		}
 
-		if len(line) > 0 && line[len(line)-1] == '\n' {
+		if len(line) > 0 && line[len(line)-1] == '\n' && lineOffset < len(lines)-1 {
 			line = line[:len(line)-1]
 		} else {
 			wrapped = true
@@ -4039,7 +4065,7 @@ func (t *Terminal) executeCommand(template string, forcePlus bool, background bo
 	t.executing.Set(true)
 	if !background {
 		// Open a separate handle for tty input
-		if in, _ := tui.TtyIn(); in != nil {
+		if in, _ := tui.TtyIn(t.ttyDefault); in != nil {
 			cmd.Stdin = in
 			if in != os.Stdin {
 				defer in.Close()
@@ -4048,7 +4074,7 @@ func (t *Terminal) executeCommand(template string, forcePlus bool, background bo
 
 		cmd.Stdout = os.Stdout
 		if !util.IsTty(os.Stdout) {
-			if out, _ := tui.TtyOut(); out != nil {
+			if out, _ := tui.TtyOut(t.ttyDefault); out != nil {
 				cmd.Stdout = out
 				defer out.Close()
 			}
@@ -4056,7 +4082,7 @@ func (t *Terminal) executeCommand(template string, forcePlus bool, background bo
 
 		cmd.Stderr = os.Stderr
 		if !util.IsTty(os.Stderr) {
-			if out, _ := tui.TtyOut(); out != nil {
+			if out, _ := tui.TtyOut(t.ttyDefault); out != nil {
 				cmd.Stderr = out
 				defer out.Close()
 			}

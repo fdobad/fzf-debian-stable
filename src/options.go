@@ -631,6 +631,7 @@ type Options struct {
 	MEMProfile        string
 	BlockProfile      string
 	MutexProfile      string
+	TtyDefault        string
 }
 
 func filterNonEmpty(input []string) []string {
@@ -730,6 +731,7 @@ func defaultOptions() *Options {
 		WalkerOpts:   walkerOpts{file: true, hidden: true, follow: true},
 		WalkerRoot:   []string{"."},
 		WalkerSkip:   []string{".git", "node_modules"},
+		TtyDefault:   tui.DefaultTtyDevice,
 		Help:         false,
 		Version:      false}
 }
@@ -1182,7 +1184,12 @@ func parseTheme(defaultTheme *tui.ColorTheme, str string) (*tui.ColorTheme, erro
 	var err error
 	theme := dupeTheme(defaultTheme)
 	rrggbb := regexp.MustCompile("^#[0-9a-fA-F]{6}$")
-	for _, str := range strings.Split(strings.ToLower(str), ",") {
+	comma := regexp.MustCompile(`[\s,]+`)
+	for _, str := range comma.Split(strings.ToLower(str), -1) {
+		str = strings.TrimSpace(str)
+		if len(str) == 0 {
+			continue
+		}
 		switch str {
 		case "dark":
 			theme = dupeTheme(tui.Dark256)
@@ -1293,6 +1300,8 @@ func parseTheme(defaultTheme *tui.ColorTheme, str string) (*tui.ColorTheme, erro
 				mergeAttr(&theme.Current)
 			case "current-bg", "bg+":
 				mergeAttr(&theme.DarkBg)
+			case "alt-bg":
+				mergeAttr(&theme.AltBg)
 			case "selected-fg":
 				mergeAttr(&theme.SelectedFg)
 			case "selected-bg":
@@ -2336,6 +2345,12 @@ func parseOptions(index *int, opts *Options, allArgs []string) error {
 			}
 		case "--no-tmux":
 			opts.Tmux = nil
+		case "--tty-default":
+			if opts.TtyDefault, err = nextString("tty device name required"); err != nil {
+				return err
+			}
+		case "--no-tty-default":
+			opts.TtyDefault = ""
 		case "--force-tty-in":
 			// NOTE: We need this because `system('fzf --tmux < /dev/tty')` doesn't
 			// work on Neovim. Same as '-' option of fzf-tmux.
