@@ -1,9 +1,16 @@
-FROM docker.io/ruby:3.4-bookworm
+FROM docker.io/ruby:3.4-slim-trixie
 
-RUN echo "deb http://deb.debian.org/debian bookworm-backports main" >> /etc/apt/sources.list
-RUN apt-get update -y && \
-    apt-get install -y -t bookworm-backports golang && \
-    apt-get install -y git make zsh fish tmux
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    apt-get install -y \
+	fish \
+	git \
+	golang \
+	make \
+	tmux \
+	zsh
     
 RUN gem install --no-document -v 5.22.3 minitest
 RUN echo '. /usr/share/bash-completion/completions/git' >> ~/.bashrc
