@@ -1,6 +1,153 @@
 CHANGELOG
 =========
 
+0.65.2
+------
+- Bug fixes and improvements
+    - Fix incorrect truncation of `--info-command` with `--info=inline-right` (#4479)
+    - [install] Support old uname in macOS (#4492)
+    - [bash 3] Fix `CTRL-T` and `ALT-C` to preserve the last yank (#4496)
+    - Do not unset `FZF_DEFAULT_*` variables when using winpty (#4497) (#4400)
+    - Fix rendering of items with tabs when using a non-default ellipsis (#4505)
+- **This is the final release to support Windows 7.**
+    - Future versions will be built with the latest Go toolchain, which has dropped support for Windows 7.
+
+0.65.1
+------
+- Fixed incorrect `$FZF_CLICK_HEADER_WORD` and `$FZF_CLICK_FOOTER_WORD` when the header or footer contains ANSI escape sequences and tab characters.
+- Fixed a bug where you cannot unset the default `--nth` using `change-nth` action.
+- Fixed a highlighting bug when using `--color fg:dim,nth:regular` pattern over ANSI-colored items.
+
+0.65.0
+------
+- Added `click-footer` event that is triggered when the footer section is clicked. When the event is triggered, the following environment variables are set:
+    - `$FZF_CLICK_FOOTER_COLUMN` - clicked column (1-based)
+    - `$FZF_CLICK_FOOTER_LINE` - clicked line (1-based)
+    - `$FZF_CLICK_FOOTER_WORD` - the word under the cursor
+  ```sh
+  fzf --footer $'[Edit] [View]\n[Copy to clipboard]' \
+      --with-shell 'bash -c' \
+      --bind 'click-footer:transform:
+        [[ $FZF_CLICK_FOOTER_WORD =~ Edit ]] && echo "execute:vim \{}"
+        [[ $FZF_CLICK_FOOTER_WORD =~ View ]] && echo "execute:view \{}"
+        (( FZF_CLICK_FOOTER_LINE == 2 )) && (( FZF_CLICK_FOOTER_COLUMN < 20 )) &&
+            echo "execute-silent(echo -n \{} | pbcopy)+bell"
+      '
+  ```
+- Added `trigger(...)` action that triggers events bound to another key or event.
+  ```sh
+  # You can click on each key name to trigger the actions bound to that key
+  fzf --footer 'Ctrl-E: Edit / Ctrl-V: View / Ctrl-Y: Copy to clipboard' \
+      --with-shell 'bash -c' \
+      --bind 'ctrl-e:execute:vim {}' \
+      --bind 'ctrl-v:execute:view {}' \
+      --bind 'ctrl-y:execute-silent(echo -n {} | pbcopy)+bell' \
+      --bind 'click-footer:transform:
+        [[ $FZF_CLICK_FOOTER_WORD =~ Ctrl ]] && echo "trigger(${FZF_CLICK_FOOTER_WORD%:})"
+      '
+  ```
+    - You can specify a series of keys and events
+      ```sh
+      fzf --bind 'a:up,b:trigger(a,a,a)'
+      ```
+- Added support for `{*n}` and `{*nf}` placeholder.
+    - `{*n}` evaluates to the zero-based ordinal index of all matched items.
+    - `{*nf}` evaluates to the temporary file containing that.
+- Bug fixes and improvements
+    - [neovim] Fixed margin background color when `&winborder` is used (#4453)
+    - Fixed rendering error when hiding a preview window without border (#4465)
+    - fix(shell): check for mawk existence before version check (#4468)
+        - Thanks to @LangLangBart and @akinomyoga
+    - Fixed `--no-header-lines-border` behavior (08027e7a)
+
+0.64.0
+------
+- Added `multi` event that is triggered when the multi-selection has changed.
+  ```sh
+  fzf --multi \
+      --bind 'ctrl-a:select-all,ctrl-d:deselect-all' \
+      --bind 'multi:transform-footer:(( FZF_SELECT_COUNT )) && echo "Selected $FZF_SELECT_COUNT item(s)"'
+  ```
+- [Halfwidth and fullwidth alphanumeric and punctuation characters](https://en.wikipedia.org/wiki/Halfwidth_and_Fullwidth_Forms_(Unicode_block)) are now internally normalized to their ASCII equivalents to allow matching with ASCII queries.
+  ```sh
+  echo ＡＢＣ| fzf -q abc
+  ```
+- Renamed `clear-selection` action to `clear-multi` for consistency.
+    - `clear-selection` remains supported as an alias for backward compatibility.
+- Bug fixes
+    - Fixed a bug that could cause fzf to abort due to incorrect update ordering.
+    - Fixed a bug where some multi-selections were lost when using `exclude` or `change-nth`.
+
+0.63.0
+------
+_Release highlights: https://junegunn.github.io/fzf/releases/0.63.0/_
+
+- Added footer. The default border style for footer is `line`, which draws a single separator line.
+  ```sh
+  fzf --reverse --footer "fzf: friend zone forever"
+  ```
+  - Options
+      - `--footer[=STRING]`
+      - `--footer-border[=STYLE]`
+      - `--footer-label=LABEL`
+      - `--footer-label-pos=COL[:bottom]`
+  - Colors
+      - `footer`
+      - `footer-bg`
+      - `footer-border`
+      - `footer-label`
+  - Actions
+      - `change-footer`
+      - `transform-footer`
+      - `bg-transform-footer`
+      - `change-footer-label`
+      - `transform-footer-label`
+      - `bg-transform-footer-label`
+- `line` border style is now allowed for all types of border except for `--list-border`.
+  ```sh
+  fzf --height 50% --style full:line --preview 'cat {}' \
+      --bind 'focus:bg-transform-header(file {})+bg-transform-footer(wc {})'
+  ```
+- Added `{*}` placeholder flag that evaluates to all matched items.
+  ```bash
+  seq 10000 | fzf --preview "awk '{sum += \$1} END {print sum}' {*f}"
+  ```
+  - Use this with caution, as it can make fzf sluggish for large lists.
+- Added asynchronous transform actions with `bg-` prefix that run asynchronously in the background, along with `bg-cancel` action to cancel currently running `bg-transform` actions.
+  ```sh
+  # Implement popup that disappears after 1 second
+  #   * Use footer as the popup
+  #   * Use `bell` to ring the terminal bell
+  #   * Use `bg-transform-footer` to clear the footer after 1 second
+  #   * Use `bg-cancel` to cancel currently running background transform actions
+  fzf --multi --list-border \
+      --bind 'enter:execute-silent(echo -n {+} | pbcopy)+bell' \
+      --bind 'enter:+transform-footer(echo Copied {} to clipboard)' \
+      --bind 'enter:+bg-cancel+bg-transform-footer(sleep 1)'
+
+  # It's okay for the commands to take a little while because they run in the background
+  GETTER='curl -s http://metaphorpsum.com/sentences/1'
+  fzf --style full --border --preview : \
+      --bind "focus:bg-transform-header:$GETTER" \
+      --bind "focus:+bg-transform-footer:$GETTER" \
+      --bind "focus:+bg-transform-border-label:$GETTER" \
+      --bind "focus:+bg-transform-preview-label:$GETTER" \
+      --bind "focus:+bg-transform-input-label:$GETTER" \
+      --bind "focus:+bg-transform-list-label:$GETTER" \
+      --bind "focus:+bg-transform-header-label:$GETTER" \
+      --bind "focus:+bg-transform-footer-label:$GETTER" \
+      --bind "focus:+bg-transform-ghost:$GETTER" \
+      --bind "focus:+bg-transform-prompt:$GETTER"
+  ```
+- Added support for full-line background color in the list section
+  ```sh
+  for i in $(seq 16 255); do
+    echo -e "\x1b[48;5;${i}m\x1b[0Khello"
+  done | fzf --ansi
+  ```
+- SSH completion enhancements by @akinomyoga
+- Bug fixes and improvements
+
 0.62.0
 ------
 - Relaxed the `--color` option syntax to allow whitespace-separated entries (in addition to commas), making multi-line definitions easier to write and read
